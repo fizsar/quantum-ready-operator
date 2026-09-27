@@ -46,12 +46,17 @@ Bajo. Si el Secret no existe o no es de tipo
 TLS, la condición `Auditado` queda en `False` con el motivo, y el operador sigue
 funcionando.
 
-Dos decisiones de diseño:
+Decisiones de diseño:
 
-- **Los Secrets se leen sin caché.** El cliente con caché de controller-runtime
-  empezaría a vigilar todos los Secrets del clúster al pedir uno; leyéndolo
-  directamente de la API, basta el permiso `get` sobre Secrets (sin `list` ni
-  `watch`).
+- **Vigilancia real de los Secrets.** Cuando un Secret se crea, cambia o se
+  borra, el operador vuelve a auditar al instante los `CryptoAudit` que lo
+  referencian (un índice por `spec.targetRef` los localiza). En kind, cada
+  cambio se refleja en `status` en menos de un segundo.
+- **El contenido de los Secrets nunca se cachea.** El permiso sobre Secrets es
+  `get;list;watch`, imprescindible para vigilarlos, pero el watch es solo de
+  metadatos (`OnlyMetadata`): la caché del operador guarda nombres y versiones,
+  no certificados ni claves privadas. El contenido se lee bajo demanda,
+  directamente del API server, solo al auditar.
 - **Solo se reconcilia cuando cambia el `spec`.** Cada escritura en `status`
   genera un evento; sin ese filtro, la propia fecha de la auditoría volvería a
   disparar la reconciliación en bucle.
@@ -176,8 +181,9 @@ make test
 ```
 
 Ejecuta los tests contra un servidor de API real (envtest): el reconciliador
-con un Secret RSA, un Secret inexistente y un Secret que no es TLS (cobertura
-del 82,8 %), y la tabla de reglas y el modelo de riesgo (98,1 %), con al menos un
+con un Secret RSA, un Secret inexistente y un Secret que no es TLS; el watch,
+con un manager real que crea, cambia, borra y recrea el Secret; y el índice por
+Secret (cobertura del 84,8 %), y la tabla de reglas y el modelo de riesgo (98,1 %), con al menos un
 caso por cada nivel de riesgo y los límites de cada umbral.
 
 ## Estado actual
@@ -187,9 +193,6 @@ datos completo: el operador lee un Secret real, extrae los algoritmos de su
 certificado, calcula su riesgo combinado con la exposición y el alcance del
 servicio, y lo refleja en `status`. Falta:
 
-- **Sin vigilancia de Secrets.** Si cambia el certificado de un Secret, no se
-  vuelve a auditar hasta que cambie el `CryptoAudit`. Si el Secret falta o no
-  es válido, se reintenta cada minuto.
 - **Solo Secrets TLS.** No se auditan otros recursos (Ingress, Services,
   configuraciones de mallas de servicio…).
 - **Tabla de reglas mínima.** Solo RSA, ECDSA y Ed25519, por familia de
