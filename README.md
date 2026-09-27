@@ -2,8 +2,8 @@
 
 Operador de Kubernetes en Go que audita la cripto-agilidad de los Secrets TLS
 del clúster: lee el certificado de cada Secret, identifica sus algoritmos y
-señala los que un ordenador cuántico podrá romper (de momento, RSA, ECDSA y
-Ed25519).
+señala los vulnerables: las familias que un ordenador cuántico podrá romper
+(RSA, ECDSA y Ed25519) y los resúmenes de firma ya rotos (MD5 y SHA-1).
 
 ## Contexto
 
@@ -32,9 +32,29 @@ spec:
 ```
 
 El operador lee el Secret, extrae el certificado de `tls.crt` con
-`crypto/x509`, clasifica el algoritmo de su clave pública y el de su firma, y
-escribe el resultado en `status`: los hallazgos, el riesgo global, la fecha de
+`crypto/x509`, clasifica el algoritmo de su clave pública y, de su firma, la
+familia y el resumen (hash), y escribe el resultado en `status`: los hallazgos, el riesgo global, la fecha de
 la auditoría y una condición `Auditado`.
+
+### Qué reconoce
+
+Igual que el analizador de certificados de la Fase 1, la clave pública da un
+hallazgo y la firma da dos (familia y resumen):
+
+| Origen | Algoritmos | Categoría |
+|---|---|---|
+| Clave pública | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) |
+| Firma: familia | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) |
+| Firma: resumen | MD5, SHA-1 | Obsoleto (colisiones prácticas) |
+| Firma: resumen | SHA-256, SHA-384, SHA-512 | Aceptable |
+
+Ed25519 no tiene un resumen separable (forma parte del propio esquema de
+firma), así que solo da el hallazgo de familia. La familia y el resumen salen
+de la constante `x509.SignatureAlgorithm`, sin analizar cadenas de texto. Los
+algoritmos sin regla no se convierten en hallazgos: se mencionan en la
+condición `Auditado`, sin inventarles una categoría.
+
+### Riesgo
 
 Cada hallazgo lleva su **riesgo combinado**, con el mismo modelo que la Fase 1:
 peso de la categoría (Crítico 4, Obsoleto 3, Advertencia 2, Aceptable 1,
@@ -120,9 +140,10 @@ kubectl get cryptoaudit web -o yaml
 ```
 
 Salida real de una prueba con tres Secrets (RSA, ECDSA y Ed25519) y distintas
-combinaciones de exposición y alcance. Con la tabla de reglas actual todos los
-algoritmos son Crítico (peso 4), así que el riesgo va de Medio (4) a Urgente
-(16):
+combinaciones de exposición y alcance. La columna RIESGO-COMBINADO es la del
+primer hallazgo (la clave pública, Crítico), que es también el que marca el
+riesgo global: un resumen Aceptable u Obsoleto nunca supera a su familia
+Crítico con la misma exposición y alcance.
 
 ```
 NOMBRE              SECRET            EXPOSICION   ALCANCE   RIESGO-COMBINADO   RIESGO-GLOBAL   AUDITADO
@@ -134,13 +155,15 @@ rsa-alta-alto       web-rsa-tls       alta         alto      Urgente (16)       
 rsa-baja-bajo       web-rsa-tls       baja         bajo      Medio (4)          Medio           True
 ```
 
-`status` de `rsa-alta-alto`:
+`status` real de un certificado RSA firmado con SHA-1 (generado con
+`openssl req -x509 -newkey rsa:2048 -sha1`), con exposición alta y alcance alto:
 
 ```yaml
 status:
   conditions:
-  - lastTransitionTime: "2026-09-27T22:03:06Z"
-    message: 'certificado "web.ejemplo.test" del Secret default/web-rsa-tls: 2 hallazgos'
+  - lastTransitionTime: "2026-09-27T23:10:18Z"
+    message: 'certificado "legado-sha1.ejemplo.test" del Secret default/legado-sha1-tls:
+      3 hallazgos'
     observedGeneration: 1
     reason: AuditoriaCompletada
     status: "True"
@@ -154,9 +177,16 @@ status:
     categoria: Crítico
     origen: firma
     riesgoCombinado: Urgente (16)
+  - algoritmo: SHA-1
+    categoria: Obsoleto
+    origen: firma
+    riesgoCombinado: Urgente (12)
   riesgoGlobal: Crítico
-  ultimaAuditoria: "2026-09-27T22:03:06Z"
+  ultimaAuditoria: "2026-09-27T23:10:18Z"
 ```
+
+Un certificado ECDSA P-384 firmado con SHA-384 da ECDSA Crítico (clave y firma)
+y SHA-384 Aceptable; uno Ed25519, solo los dos hallazgos Ed25519.
 
 Cambiar el `spec` vuelve a auditar: al pasar `rsa-baja-bajo` a exposición alta,
 su riesgo cambió de Medio (4) a Alto (8) sin recrear el recurso.
@@ -183,8 +213,9 @@ make test
 Ejecuta los tests contra un servidor de API real (envtest): el reconciliador
 con un Secret RSA, un Secret inexistente y un Secret que no es TLS; el watch,
 con un manager real que crea, cambia, borra y recrea el Secret; y el índice por
-Secret (cobertura del 84,8 %), y la tabla de reglas y el modelo de riesgo (98,1 %), con al menos un
-caso por cada nivel de riesgo y los límites de cada umbral.
+Secret (cobertura del 84,8 %); y la tabla de reglas (cada familia y cada resumen
+de firma, con certificados reales) y el modelo de riesgo (98,1 %), con al menos
+un caso por cada nivel de riesgo y los límites de cada umbral.
 
 ## Estado actual
 
@@ -195,10 +226,10 @@ servicio, y lo refleja en `status`. Falta:
 
 - **Solo Secrets TLS.** No se auditan otros recursos (Ingress, Services,
   configuraciones de mallas de servicio…).
-- **Tabla de reglas mínima.** Solo RSA, ECDSA y Ed25519, por familia de
-  algoritmo: el hash de la firma (SHA-1, MD5) todavía no se clasifica y el resto
-  del libro de reglas de la Fase 1 no se ha migrado. Los algoritmos sin regla se
-  mencionan en la condición `Auditado` sin inventarles una categoría.
+- **Algunos algoritmos de certificado aún sin regla.** Respecto al analizador de
+  certificados de la Fase 1, faltan DSA (Crítico en la Fase 1) y la detección
+  de firmas post-cuánticas (ML-DSA, SLH-DSA). Hoy se mencionan en la condición
+  `Auditado` como algoritmos sin regla.
 - **Solo el primer certificado** de `tls.crt`; el resto de la cadena no se
   audita.
 - **Probado solo con `make run`.** El despliegue dentro del clúster (imagen,
