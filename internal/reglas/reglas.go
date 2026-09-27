@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package reglas es el equivalente mínimo en Go del libro de reglas de la
-// Fase 1 (quantum_ready/reglas.py y riesgo.py del proyecto QuantumReady). De
-// momento solo clasifica RSA, ECDSA y Ed25519; el resto del libro se migrará
-// más adelante.
+// Package reglas es el equivalente en Go de una parte del libro de reglas de
+// la Fase 1 (quantum_ready/reglas.py y riesgo.py del proyecto QuantumReady):
+// las familias RSA, ECDSA y Ed25519 y los resúmenes (hash) de las firmas.
 package reglas
 
 import (
@@ -35,9 +34,44 @@ type Regla struct {
 // Tabla contiene las reglas disponibles, con las mismas categorías y motivos
 // que la Fase 1.
 var Tabla = map[string]Regla{
+	// Familias de clave pública y de firma: rotas por Shor
 	"RSA":     {securityv1alpha1.CategoriaCritico, "Roto por Shor (factorización de enteros)."},
 	"ECDSA":   {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
 	"Ed25519": {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
+	// Resúmenes (hash) de la firma
+	"MD5":     {securityv1alpha1.CategoriaObsoleto, "Colisiones prácticas desde 2004."},
+	"SHA-1":   {securityv1alpha1.CategoriaObsoleto, "Colisión práctica demostrada (SHAttered, 2017)."},
+	"SHA-256": {securityv1alpha1.CategoriaAceptable, "Grover lo deja en 128 bits efectivos, suficiente hoy."},
+	"SHA-384": {securityv1alpha1.CategoriaAceptable, "Margen amplio incluso frente a Grover."},
+	"SHA-512": {securityv1alpha1.CategoriaAceptable, "Margen amplio incluso frente a Grover."},
+}
+
+// firma descompone un algoritmo de firma en su familia y su resumen.
+type firma struct {
+	familia string
+	// hash es "" cuando el resumen forma parte del propio esquema de firma
+	// (Ed25519) y no es un parámetro separable.
+	hash string
+}
+
+// firmas asigna a cada x509.SignatureAlgorithm su familia y su resumen.
+var firmas = map[x509.SignatureAlgorithm]firma{
+	x509.MD2WithRSA:       {"RSA", "MD2"},
+	x509.MD5WithRSA:       {"RSA", "MD5"},
+	x509.SHA1WithRSA:      {"RSA", "SHA-1"},
+	x509.SHA256WithRSA:    {"RSA", "SHA-256"},
+	x509.SHA384WithRSA:    {"RSA", "SHA-384"},
+	x509.SHA512WithRSA:    {"RSA", "SHA-512"},
+	x509.SHA256WithRSAPSS: {"RSA", "SHA-256"},
+	x509.SHA384WithRSAPSS: {"RSA", "SHA-384"},
+	x509.SHA512WithRSAPSS: {"RSA", "SHA-512"},
+	x509.ECDSAWithSHA1:    {"ECDSA", "SHA-1"},
+	x509.ECDSAWithSHA256:  {"ECDSA", "SHA-256"},
+	x509.ECDSAWithSHA384:  {"ECDSA", "SHA-384"},
+	x509.ECDSAWithSHA512:  {"ECDSA", "SHA-512"},
+	x509.PureEd25519:      {"Ed25519", ""},
+	x509.DSAWithSHA1:      {"DSA", "SHA-1"},
+	x509.DSAWithSHA256:    {"DSA", "SHA-256"},
 }
 
 // AlgoritmoClavePublica devuelve la familia del algoritmo de la clave pública.
@@ -54,21 +88,14 @@ func AlgoritmoClavePublica(cert *x509.Certificate) string {
 	}
 }
 
-// AlgoritmoFirma devuelve la familia del algoritmo con el que se firmó el
-// certificado. El hash de la firma (p. ej. SHA-1) todavía no se clasifica.
-func AlgoritmoFirma(cert *x509.Certificate) string {
-	switch cert.SignatureAlgorithm {
-	case x509.MD2WithRSA, x509.MD5WithRSA, x509.SHA1WithRSA, x509.SHA256WithRSA,
-		x509.SHA384WithRSA, x509.SHA512WithRSA, x509.SHA256WithRSAPSS,
-		x509.SHA384WithRSAPSS, x509.SHA512WithRSAPSS:
-		return "RSA"
-	case x509.ECDSAWithSHA1, x509.ECDSAWithSHA256, x509.ECDSAWithSHA384, x509.ECDSAWithSHA512:
-		return "ECDSA"
-	case x509.PureEd25519:
-		return "Ed25519"
-	default:
-		return cert.SignatureAlgorithm.String()
+// DescomponerFirma devuelve la familia y el resumen del algoritmo de firma.
+// Un algoritmo que no está en la tabla devuelve su nombre como familia y
+// ningún resumen.
+func DescomponerFirma(algoritmo x509.SignatureAlgorithm) (familia, hash string) {
+	if f, ok := firmas[algoritmo]; ok {
+		return f.familia, f.hash
 	}
+	return algoritmo.String(), ""
 }
 
 // Resultado de auditar un certificado.
@@ -81,17 +108,27 @@ type Resultado struct {
 	SinRegla []string
 }
 
-// Auditar clasifica la clave pública y la firma del certificado y calcula el
-// riesgo combinado de cada hallazgo con la exposición y el alcance del servicio.
+// Auditar clasifica el certificado y calcula el riesgo combinado de cada
+// hallazgo con la exposición y el alcance del servicio. Como en la Fase 1:
+// la clave pública da un hallazgo (su familia) y la firma da dos (su familia
+// y su resumen), salvo en Ed25519, cuyo resumen no es separable.
 func Auditar(cert *x509.Certificate, exposicion securityv1alpha1.Exposicion,
 	alcance securityv1alpha1.Alcance) (Resultado, error) {
+	familiaFirma, hashFirma := DescomponerFirma(cert.SignatureAlgorithm)
 	encontrados := []struct {
 		algoritmo string
 		origen    securityv1alpha1.Origen
 	}{
 		{AlgoritmoClavePublica(cert), securityv1alpha1.OrigenClavePublica},
-		{AlgoritmoFirma(cert), securityv1alpha1.OrigenFirma},
+		{familiaFirma, securityv1alpha1.OrigenFirma},
 	}
+	if hashFirma != "" {
+		encontrados = append(encontrados, struct {
+			algoritmo string
+			origen    securityv1alpha1.Origen
+		}{hashFirma, securityv1alpha1.OrigenFirma})
+	}
+
 	var resultado Resultado
 	var niveles []string
 	for _, e := range encontrados {

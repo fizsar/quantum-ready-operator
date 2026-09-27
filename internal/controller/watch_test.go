@@ -156,7 +156,7 @@ var _ = Describe("CryptoAudit Controller con el watch de Secrets", Ordered, func
 		Expect(err).NotTo(HaveOccurred())
 		Expect(k8sClient.Create(ctx, secretTLS(rsaClave))).To(Succeed())
 		Eventually(razon, plazo, 50*time.Millisecond).Should(Equal(RazonAuditoriaCompletada))
-		Expect(algoritmos()).To(Equal([]string{"RSA", "RSA"}))
+		Expect(algoritmos()).To(Equal([]string{"RSA", "RSA", "SHA-256"}))
 	})
 
 	It("al cambiar el certificado del Secret, cambian los hallazgos sin tocar el CryptoAudit", func() {
@@ -168,7 +168,7 @@ var _ = Describe("CryptoAudit Controller con el watch de Secrets", Ordered, func
 		actual.Data = secretTLS(ecClave).Data
 		Expect(k8sClient.Update(ctx, actual)).To(Succeed())
 
-		Eventually(algoritmos, plazo, 50*time.Millisecond).Should(Equal([]string{"ECDSA", "ECDSA"}))
+		Eventually(algoritmos, plazo, 50*time.Millisecond).Should(Equal([]string{"ECDSA", "ECDSA", "SHA-256"}))
 		Expect(generacion()).To(Equal(antes)) // el spec del CryptoAudit no ha cambiado
 	})
 
@@ -187,7 +187,7 @@ var _ = Describe("CryptoAudit Controller con el watch de Secrets", Ordered, func
 		Expect(k8sClient.Create(ctx, secretTLS(rsaClave))).To(Succeed())
 		Eventually(razon, plazo, 50*time.Millisecond).Should(Equal(RazonAuditoriaCompletada))
 		Expect(condicion().Status).To(Equal(metav1.ConditionTrue))
-		Expect(algoritmos()).To(Equal([]string{"RSA", "RSA"}))
+		Expect(algoritmos()).To(Equal([]string{"RSA", "RSA", "SHA-256"}))
 	})
 })
 

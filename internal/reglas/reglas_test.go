@@ -26,13 +26,22 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"reflect"
 	"testing"
 	"time"
 
 	securityv1alpha1 "github.com/fizsar/quantum-ready-operator/api/v1alpha1"
 )
 
-// autofirmado genera un certificado autofirmado con la clave indicada.
+const (
+	critico   = securityv1alpha1.CategoriaCritico
+	obsoleto  = securityv1alpha1.CategoriaObsoleto
+	aceptable = securityv1alpha1.CategoriaAceptable
+	clave     = securityv1alpha1.OrigenClavePublica
+	firmaO    = securityv1alpha1.OrigenFirma
+)
+
+// autofirmado genera un certificado autofirmado real con la clave indicada.
 func autofirmado(t *testing.T, privada crypto.Signer) *x509.Certificate {
 	t.Helper()
 	plantilla := &x509.Certificate{
@@ -52,46 +61,118 @@ func autofirmado(t *testing.T, privada crypto.Signer) *x509.Certificate {
 	return cert
 }
 
-func TestAuditarClasificaClaveYFirmaConSuRiesgo(t *testing.T) {
+// Cada rama de la tabla de firmas: familia y resumen de cada constante de x509.
+func TestDescomponerFirma(t *testing.T) {
+	casos := []struct {
+		algoritmo     x509.SignatureAlgorithm
+		familia, hash string
+	}{
+		{x509.MD2WithRSA, "RSA", "MD2"},
+		{x509.MD5WithRSA, "RSA", "MD5"},
+		{x509.SHA1WithRSA, "RSA", "SHA-1"},
+		{x509.SHA256WithRSA, "RSA", "SHA-256"},
+		{x509.SHA384WithRSA, "RSA", "SHA-384"},
+		{x509.SHA512WithRSA, "RSA", "SHA-512"},
+		{x509.SHA256WithRSAPSS, "RSA", "SHA-256"},
+		{x509.SHA384WithRSAPSS, "RSA", "SHA-384"},
+		{x509.SHA512WithRSAPSS, "RSA", "SHA-512"},
+		{x509.ECDSAWithSHA1, "ECDSA", "SHA-1"},
+		{x509.ECDSAWithSHA256, "ECDSA", "SHA-256"},
+		{x509.ECDSAWithSHA384, "ECDSA", "SHA-384"},
+		{x509.ECDSAWithSHA512, "ECDSA", "SHA-512"},
+		{x509.PureEd25519, "Ed25519", ""}, // resumen no separable
+		{x509.DSAWithSHA1, "DSA", "SHA-1"},
+		{x509.DSAWithSHA256, "DSA", "SHA-256"},
+		{x509.UnknownSignatureAlgorithm, x509.UnknownSignatureAlgorithm.String(), ""},
+	}
+	for _, c := range casos {
+		familia, hash := DescomponerFirma(c.algoritmo)
+		if familia != c.familia || hash != c.hash {
+			t.Errorf("DescomponerFirma(%v) = %q, %q; se esperaba %q, %q",
+				c.algoritmo, familia, hash, c.familia, c.hash)
+		}
+	}
+}
+
+// Cada rama de la clasificación de resúmenes, con el certificado como lo vería
+// el operador (clave pública RSA): 3 hallazgos por certificado.
+func TestAuditarClasificaElResumenDeLaFirma(t *testing.T) {
+	casos := []struct {
+		algoritmo x509.SignatureAlgorithm
+		hash      string
+		categoria securityv1alpha1.Categoria
+		riesgo    string // con exposición baja y alcance bajo
+	}{
+		{x509.MD5WithRSA, "MD5", obsoleto, "Bajo (3)"},
+		{x509.SHA1WithRSA, "SHA-1", obsoleto, "Bajo (3)"},
+		{x509.SHA256WithRSA, "SHA-256", aceptable, "Bajo (1)"},
+		{x509.SHA384WithRSA, "SHA-384", aceptable, "Bajo (1)"},
+		{x509.SHA512WithRSA, "SHA-512", aceptable, "Bajo (1)"},
+	}
+	for _, c := range casos {
+		cert := &x509.Certificate{PublicKeyAlgorithm: x509.RSA, SignatureAlgorithm: c.algoritmo}
+		resultado, err := Auditar(cert, "baja", "bajo")
+		if err != nil {
+			t.Fatal(err)
+		}
+		esperado := []securityv1alpha1.Hallazgo{
+			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Medio (4)"},
+			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Medio (4)"},
+			{Algoritmo: c.hash, Origen: firmaO, Categoria: c.categoria, RiesgoCombinado: c.riesgo},
+		}
+		if !reflect.DeepEqual(resultado.Hallazgos, esperado) {
+			t.Errorf("%v:\n  hallazgos = %+v\n  esperados = %+v", c.algoritmo, resultado.Hallazgos, esperado)
+		}
+		if resultado.RiesgoGlobal != "Medio" { // el peor caso es la familia (Medio), no el hash
+			t.Errorf("%v: RiesgoGlobal = %q, se esperaba \"Medio\"", c.algoritmo, resultado.RiesgoGlobal)
+		}
+	}
+}
+
+// Certificados reales generados en el test: la firma que elige Go para cada clave.
+func TestAuditarCertificadosReales(t *testing.T) {
 	rsaClave, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecClave, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ec256, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ec384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	_, edClave, _ := ed25519.GenerateKey(rand.Reader)
 
 	casos := []struct {
-		nombre     string
-		clave      crypto.Signer
-		algoritmo  string
-		exposicion securityv1alpha1.Exposicion
-		alcance    securityv1alpha1.Alcance
-		riesgo     string
-		global     string
+		nombre    string
+		clave     crypto.Signer
+		hallazgos []securityv1alpha1.Hallazgo
+		global    string
 	}{
-		{"RSA alta/alto", rsaClave, "RSA", "alta", "alto", "Urgente (16)", "Crítico"},
-		{"ECDSA baja/alto", ecClave, "ECDSA", "baja", "alto", "Alto (8)", "Alto"},
-		{"Ed25519 baja/bajo", edClave, "Ed25519", "baja", "bajo", "Medio (4)", "Medio"},
+		{"RSA con SHA-256", rsaClave, []securityv1alpha1.Hallazgo{
+			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "SHA-256", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
+		}, "Crítico"},
+		{"ECDSA P-256 con SHA-256", ec256, []securityv1alpha1.Hallazgo{
+			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "SHA-256", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
+		}, "Crítico"},
+		{"ECDSA P-384 con SHA-384", ec384, []securityv1alpha1.Hallazgo{
+			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "SHA-384", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
+		}, "Crítico"},
+		{"Ed25519 sin resumen separable", edClave, []securityv1alpha1.Hallazgo{
+			{Algoritmo: "Ed25519", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "Ed25519", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+		}, "Crítico"},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			resultado, err := Auditar(autofirmado(t, c.clave), c.exposicion, c.alcance)
+			resultado, err := Auditar(autofirmado(t, c.clave), "alta", "alto")
 			if err != nil {
 				t.Fatal(err)
 			}
 			if len(resultado.SinRegla) != 0 {
-				t.Fatalf("no debería haber algoritmos sin regla: %v", resultado.SinRegla)
+				t.Errorf("no debería haber algoritmos sin regla: %v", resultado.SinRegla)
 			}
-			if len(resultado.Hallazgos) != 2 {
-				t.Fatalf("se esperaban 2 hallazgos (clave pública y firma), hay %d", len(resultado.Hallazgos))
-			}
-			for i, origen := range []securityv1alpha1.Origen{
-				securityv1alpha1.OrigenClavePublica, securityv1alpha1.OrigenFirma,
-			} {
-				esperado := securityv1alpha1.Hallazgo{
-					Algoritmo: c.algoritmo, Origen: origen,
-					Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: c.riesgo,
-				}
-				if resultado.Hallazgos[i] != esperado {
-					t.Errorf("hallazgo %d = %+v, se esperaba %+v", i, resultado.Hallazgos[i], esperado)
-				}
+			if !reflect.DeepEqual(resultado.Hallazgos, c.hallazgos) {
+				t.Errorf("hallazgos = %+v\nesperados = %+v", resultado.Hallazgos, c.hallazgos)
 			}
 			if resultado.RiesgoGlobal != c.global {
 				t.Errorf("RiesgoGlobal = %q, se esperaba %q", resultado.RiesgoGlobal, c.global)
@@ -100,29 +181,67 @@ func TestAuditarClasificaClaveYFirmaConSuRiesgo(t *testing.T) {
 	}
 }
 
-func TestAlgoritmosSinReglaNoInventanCategoriaNiRiesgo(t *testing.T) {
-	cert := &x509.Certificate{
-		PublicKeyAlgorithm: x509.DSA,
-		SignatureAlgorithm: x509.DSAWithSHA256,
-	}
+// El riesgo global sigue siendo el peor caso con los nuevos hallazgos: si la
+// familia no tiene regla, lo marca el resumen (SHA-1, Obsoleto × alta × alto =
+// Urgente -> Crítico).
+func TestRiesgoGlobalConHallazgosDeResumen(t *testing.T) {
+	cert := &x509.Certificate{PublicKeyAlgorithm: x509.DSA, SignatureAlgorithm: x509.DSAWithSHA1}
 	resultado, err := Auditar(cert, "alta", "alto")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(resultado.Hallazgos) != 0 {
-		t.Errorf("no debería haber hallazgos: %+v", resultado.Hallazgos)
+	esperado := []securityv1alpha1.Hallazgo{
+		{Algoritmo: "SHA-1", Origen: firmaO, Categoria: obsoleto, RiesgoCombinado: "Urgente (12)"},
 	}
-	if len(resultado.SinRegla) != 2 || resultado.SinRegla[0] != "DSA" {
+	if !reflect.DeepEqual(resultado.Hallazgos, esperado) {
+		t.Errorf("hallazgos = %+v, esperados %+v", resultado.Hallazgos, esperado)
+	}
+	if !reflect.DeepEqual(resultado.SinRegla, []string{"DSA", "DSA"}) {
 		t.Errorf("SinRegla = %v", resultado.SinRegla)
 	}
-	if resultado.RiesgoGlobal != "" {
-		t.Errorf("sin hallazgos, el riesgo global debe quedar vacío, no %q", resultado.RiesgoGlobal)
+	if resultado.RiesgoGlobal != "Crítico" {
+		t.Errorf("RiesgoGlobal = %q, se esperaba \"Crítico\"", resultado.RiesgoGlobal)
+	}
+}
+
+func TestAlgoritmosSinReglaNoInventanCategoriaNiRiesgo(t *testing.T) {
+	casos := []struct {
+		nombre   string
+		cert     *x509.Certificate
+		sinRegla []string
+	}{
+		{"familias desconocidas", &x509.Certificate{
+			PublicKeyAlgorithm: x509.UnknownPublicKeyAlgorithm,
+			SignatureAlgorithm: x509.UnknownSignatureAlgorithm,
+		}, []string{x509.UnknownPublicKeyAlgorithm.String(), x509.UnknownSignatureAlgorithm.String()}},
+		{"resumen MD2 sin regla", &x509.Certificate{
+			PublicKeyAlgorithm: x509.DSA,
+			SignatureAlgorithm: x509.MD2WithRSA,
+		}, []string{"DSA", "MD2"}},
+	}
+	for _, c := range casos {
+		resultado, err := Auditar(c.cert, "alta", "alto")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, h := range resultado.Hallazgos {
+			if h.Algoritmo == "MD2" || h.Algoritmo == x509.UnknownSignatureAlgorithm.String() {
+				t.Errorf("%s: un algoritmo sin regla no debe ser hallazgo: %+v", c.nombre, h)
+			}
+		}
+		if !reflect.DeepEqual(resultado.SinRegla, c.sinRegla) {
+			t.Errorf("%s: SinRegla = %v, se esperaba %v", c.nombre, resultado.SinRegla, c.sinRegla)
+		}
+	}
+	vacio, _ := Auditar(casos[0].cert, "alta", "alto")
+	if len(vacio.Hallazgos) != 0 || vacio.RiesgoGlobal != "" {
+		t.Errorf("sin hallazgos, el riesgo global debe quedar vacío: %+v", vacio)
 	}
 }
 
 func TestAuditarPropagaElErrorDeUnaExposicionNoValida(t *testing.T) {
-	rsaClave, _ := rsa.GenerateKey(rand.Reader, 2048)
-	if _, err := Auditar(autofirmado(t, rsaClave), "media", "alto"); err == nil {
+	cert := &x509.Certificate{PublicKeyAlgorithm: x509.RSA, SignatureAlgorithm: x509.SHA256WithRSA}
+	if _, err := Auditar(cert, "media", "alto"); err == nil {
 		t.Error("una exposición no válida debería dar error")
 	}
 }

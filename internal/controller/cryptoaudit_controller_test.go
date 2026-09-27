@@ -110,6 +110,9 @@ var _ = Describe("CryptoAudit Controller", func() {
 				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
 			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenFirma,
 				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
+			// Resumen de la firma: Aceptable (1) × alta (2) × bajo (1) = 2 -> Bajo
+			{Algoritmo: "SHA-256", Origen: securityv1alpha1.OrigenFirma,
+				Categoria: securityv1alpha1.CategoriaAceptable, RiesgoCombinado: "Bajo (2)"},
 		}))
 		// Crítico (4) × exposición alta (2) × alcance bajo (1) = 8 -> Alto -> global Alto
 		Expect(a.Status.RiesgoGlobal).To(Equal("Alto"))
