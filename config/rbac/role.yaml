@@ -1,0 +1,38 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: manager-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - secrets
+  verbs:
+  - get
+- apiGroups:
+  - security.fizsar.github.io
+  resources:
+  - cryptoaudits
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - security.fizsar.github.io
+  resources:
+  - cryptoaudits/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - security.fizsar.github.io
+  resources:
+  - cryptoaudits/status
+  verbs:
+  - get
+  - patch
+  - update
