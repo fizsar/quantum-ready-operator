@@ -126,7 +126,9 @@ var _ = Describe("CryptoAudit Controller", func() {
 
 		resultado, a := reconciliar("ausente")
 
-		Expect(resultado.RequeueAfter).To(Equal(reintentoTrasFallo))
+		// Sin reintento por temporizador: el watch de Secrets vuelve a disparar
+		// la auditoría cuando el Secret aparezca.
+		Expect(resultado).To(Equal(reconcile.Result{}))
 		Expect(a.Status.Hallazgos).To(BeEmpty())
 		condicion := meta.FindStatusCondition(a.Status.Conditions, CondicionAuditado)
 		Expect(condicion).NotTo(BeNil())
