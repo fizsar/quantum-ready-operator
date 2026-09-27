@@ -49,6 +49,7 @@ const (
 	RazonSecretNoEncontrado  = "SecretNoEncontrado"
 	RazonTipoDeSecret        = "TipoDeSecretIncorrecto"
 	RazonCertificadoNoValido = "CertificadoNoValido"
+	RazonSpecNoValido        = "SpecNoValido"
 
 	// Todavía no se vigilan los Secrets: si falta o no es válido, se reintenta
 	// periódicamente por si aparece o se corrige.
@@ -106,14 +107,18 @@ func (r *CryptoAuditReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			fmt.Sprintf("%s del Secret %s: %v", corev1.TLSCertKey, clave, err))
 	}
 
-	hallazgos, sinRegla := reglas.Auditar(cert)
-	auditoria.Status.Hallazgos = hallazgos
-	auditoria.Status.RiesgoGlobal = string(reglas.PeorCaso(hallazgos))
+	resultado, err := reglas.Auditar(cert, auditoria.Spec.Exposicion, auditoria.Spec.Alcance)
+	if err != nil {
+		// El esquema del CRD ya limita exposición y alcance: no debería ocurrir.
+		return r.fallo(ctx, &auditoria, RazonSpecNoValido, err.Error())
+	}
+	auditoria.Status.Hallazgos = resultado.Hallazgos
+	auditoria.Status.RiesgoGlobal = resultado.RiesgoGlobal
 	auditoria.Status.UltimaAuditoria = metav1.Now()
 	mensaje := fmt.Sprintf("certificado %q del Secret %s: %d hallazgos",
-		cert.Subject.CommonName, clave, len(hallazgos))
-	if len(sinRegla) > 0 {
-		mensaje += "; algoritmos sin regla todavía: " + strings.Join(sinRegla, ", ")
+		cert.Subject.CommonName, clave, len(resultado.Hallazgos))
+	if len(resultado.SinRegla) > 0 {
+		mensaje += "; algoritmos sin regla todavía: " + strings.Join(resultado.SinRegla, ", ")
 	}
 	meta.SetStatusCondition(&auditoria.Status.Conditions, metav1.Condition{
 		Type:               CondicionAuditado,
@@ -126,7 +131,7 @@ func (r *CryptoAuditReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 	log.Info("auditoría completada", "secret", clave.String(),
-		"riesgoGlobal", auditoria.Status.RiesgoGlobal, "hallazgos", len(hallazgos))
+		"riesgoGlobal", auditoria.Status.RiesgoGlobal, "hallazgos", len(resultado.Hallazgos))
 	return ctrl.Result{}, nil
 }
 

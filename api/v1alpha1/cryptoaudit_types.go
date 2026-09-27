@@ -88,8 +88,9 @@ type Hallazgo struct {
 	// categoria según el libro de reglas.
 	Categoria Categoria `json:"categoria"`
 
-	// riesgoCombinado = categoría × exposición × alcance, como en la Fase 1.
-	// TODO: todavía no se calcula; queda vacío.
+	// riesgoCombinado = peso de la categoría × exposición × alcance (0–16), con los
+	// pesos y umbrales de la Fase 1, en el formato "Nivel (puntuación)",
+	// p. ej. "Urgente (16)".
 	// +optional
 	RiesgoCombinado string `json:"riesgoCombinado,omitempty"`
 }
@@ -100,7 +101,9 @@ type CryptoAuditStatus struct {
 	// +optional
 	Hallazgos []Hallazgo `json:"hallazgos,omitempty"`
 
-	// riesgoGlobal por la regla del peor caso.
+	// riesgoGlobal por la regla del peor caso de la Fase 4 sobre el riesgo
+	// combinado: algún Urgente -> Crítico; si no, algún Alto -> Alto; si no,
+	// algún Medio -> Medio; si no, Bajo. Vacío si ningún algoritmo tiene regla.
 	// +optional
 	RiesgoGlobal string `json:"riesgoGlobal,omitempty"`
 

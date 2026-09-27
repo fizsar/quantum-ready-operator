@@ -183,8 +183,10 @@ spec:
                       - firma
                       type: string
                     riesgoCombinado:
-                      description: riesgoCombinado = categoría × exposición × alcance,
-                        como en la Fase 1.
+                      description: |-
+                        riesgoCombinado = peso de la categoría × exposición × alcance (0–16), con los
+                        pesos y umbrales de la Fase 1, en el formato "Nivel (puntuación)",
+                        p. ej. "Urgente (16)".
                       type: string
                   required:
                   - algoritmo
@@ -193,7 +195,10 @@ spec:
                   type: object
                 type: array
               riesgoGlobal:
-                description: riesgoGlobal por la regla del peor caso.
+                description: |-
+                  riesgoGlobal por la regla del peor caso de la Fase 4 sobre el riesgo
+                  combinado: algún Urgente -> Crítico; si no, algún Alto -> Alto; si no,
+                  algún Medio -> Medio; si no, Bajo. Vacío si ningún algoritmo tiene regla.
                 type: string
               ultimaAuditoria:
                 description: ultimaAuditoria es cuándo se auditó el certificado por

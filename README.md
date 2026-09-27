@@ -34,7 +34,15 @@ spec:
 El operador lee el Secret, extrae el certificado de `tls.crt` con
 `crypto/x509`, clasifica el algoritmo de su clave pública y el de su firma, y
 escribe el resultado en `status`: los hallazgos, el riesgo global, la fecha de
-la auditoría y una condición `Auditado`. Si el Secret no existe o no es de tipo
+la auditoría y una condición `Auditado`.
+
+Cada hallazgo lleva su **riesgo combinado**, con el mismo modelo que la Fase 1:
+peso de la categoría (Crítico 4, Obsoleto 3, Advertencia 2, Aceptable 1,
+Post-cuántico 0) × exposición (alta 2, baja 1) × alcance (alto 2, bajo 1), de 0 a
+16, con los niveles Ninguno (0), Bajo (1-3), Medio (4-7), Alto (8-11) y Urgente
+(12-16). El **riesgo global** sigue la regla del peor caso de la Fase 4: algún
+Urgente → Crítico; si no, algún Alto → Alto; si no, algún Medio → Medio; si no,
+Bajo. Si el Secret no existe o no es de tipo
 TLS, la condición `Auditado` queda en `False` con el motivo, y el operador sigue
 funcionando.
 
@@ -106,22 +114,27 @@ kubectl get cryptoaudits
 kubectl get cryptoaudit web -o yaml
 ```
 
-Salida real con ese Secret RSA y otros casos de prueba (un certificado ECDSA,
-uno Ed25519, un Secret inexistente y un Secret que no es TLS):
+Salida real de una prueba con tres Secrets (RSA, ECDSA y Ed25519) y distintas
+combinaciones de exposición y alcance. Con la tabla de reglas actual todos los
+algoritmos son Crítico (peso 4), así que el riesgo va de Medio (4) a Urgente
+(16):
 
 ```
-NAME             SECRET            RIESGO     AUDITADO   ULTIMA-AUDITORIA
-api              api-ecdsa-tls     Crítico    True       5s
-secret-ausente   no-existe                    False
-secret-no-tls    no-es-tls                    False
-sso              sso-ed25519-tls   Crítico    True       5s
-web              web-rsa-tls       Crítico    True       5s
+NOMBRE              SECRET            EXPOSICION   ALCANCE   RIESGO-COMBINADO   RIESGO-GLOBAL   AUDITADO
+ecdsa-alta-bajo     api-ecdsa-tls     alta         bajo      Alto (8)           Alto            True
+ecdsa-baja-alto     api-ecdsa-tls     baja         alto      Alto (8)           Alto            True
+ed25519-alta-alto   sso-ed25519-tls   alta         alto      Urgente (16)       Crítico         True
+ed25519-baja-bajo   sso-ed25519-tls   baja         bajo      Medio (4)          Medio           True
+rsa-alta-alto       web-rsa-tls       alta         alto      Urgente (16)       Crítico         True
+rsa-baja-bajo       web-rsa-tls       baja         bajo      Medio (4)          Medio           True
 ```
+
+`status` de `rsa-alta-alto`:
 
 ```yaml
 status:
   conditions:
-  - lastTransitionTime: "2026-09-27T17:40:35Z"
+  - lastTransitionTime: "2026-09-27T22:03:06Z"
     message: 'certificado "web.ejemplo.test" del Secret default/web-rsa-tls: 2 hallazgos'
     observedGeneration: 1
     reason: AuditoriaCompletada
@@ -131,12 +144,20 @@ status:
   - algoritmo: RSA
     categoria: Crítico
     origen: clavePublica
+    riesgoCombinado: Urgente (16)
   - algoritmo: RSA
     categoria: Crítico
     origen: firma
+    riesgoCombinado: Urgente (16)
   riesgoGlobal: Crítico
-  ultimaAuditoria: "2026-09-27T17:40:35Z"
+  ultimaAuditoria: "2026-09-27T22:03:06Z"
 ```
+
+Cambiar el `spec` vuelve a auditar: al pasar `rsa-baja-bajo` a exposición alta,
+su riesgo cambió de Medio (4) a Alto (8) sin recrear el recurso.
+
+Si el Secret no existe o no es de tipo TLS, la condición `Auditado` queda en
+`False` con el motivo (`SecretNoEncontrado`, `TipoDeSecretIncorrecto`).
 
 El esquema rechaza valores no válidos; por ejemplo, `exposicion: media` da
 `spec.exposicion: Unsupported value: "media": supported values: "alta", "baja"`.
@@ -156,20 +177,16 @@ make test
 
 Ejecuta los tests contra un servidor de API real (envtest): el reconciliador
 con un Secret RSA, un Secret inexistente y un Secret que no es TLS (cobertura
-del 83,9 %), y la tabla de reglas (100 %).
+del 82,8 %), y la tabla de reglas y el modelo de riesgo (98,1 %), con al menos un
+caso por cada nivel de riesgo y los límites de cada umbral.
 
 ## Estado actual
 
 **Primer hito funcional, no un producto completo.** Ya funciona el camino de
 datos completo: el operador lee un Secret real, extrae los algoritmos de su
-certificado y los refleja en `status`. Falta:
+certificado, calcula su riesgo combinado con la exposición y el alcance del
+servicio, y lo refleja en `status`. Falta:
 
-- **Riesgo combinado.** `spec.exposicion` y `spec.alcance` se validan pero
-  todavía no se usan: `riesgoCombinado` queda vacío (Fase 1: categoría ×
-  exposición × alcance).
-- **Riesgo global provisional.** Mientras no haya riesgo combinado,
-  `riesgoGlobal` aplica la regla del peor caso sobre la categoría, no sobre el
-  riesgo combinado como en la Fase 4.
 - **Sin vigilancia de Secrets.** Si cambia el certificado de un Secret, no se
   vuelve a auditar hasta que cambie el `CryptoAudit`. Si el Secret falta o no
   es válido, se reintenta cada minuto.

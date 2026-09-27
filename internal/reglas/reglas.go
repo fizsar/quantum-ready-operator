@@ -15,8 +15,9 @@ limitations under the License.
 */
 
 // Package reglas es el equivalente mínimo en Go del libro de reglas de la
-// Fase 1 (quantum_ready/reglas.py del proyecto QuantumReady). De momento solo
-// clasifica RSA, ECDSA y Ed25519; el resto del libro se migrará más adelante.
+// Fase 1 (quantum_ready/reglas.py y riesgo.py del proyecto QuantumReady). De
+// momento solo clasifica RSA, ECDSA y Ed25519; el resto del libro se migrará
+// más adelante.
 package reglas
 
 import (
@@ -37,15 +38,6 @@ var Tabla = map[string]Regla{
 	"RSA":     {securityv1alpha1.CategoriaCritico, "Roto por Shor (factorización de enteros)."},
 	"ECDSA":   {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
 	"Ed25519": {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
-}
-
-// pesos de cada categoría, los mismos que PESOS_CATEGORIA en riesgo.py.
-var pesos = map[securityv1alpha1.Categoria]int{
-	securityv1alpha1.CategoriaCritico:      4,
-	securityv1alpha1.CategoriaObsoleto:     3,
-	securityv1alpha1.CategoriaAdvertencia:  2,
-	securityv1alpha1.CategoriaAceptable:    1,
-	securityv1alpha1.CategoriaPostCuantico: 0,
 }
 
 // AlgoritmoClavePublica devuelve la familia del algoritmo de la clave pública.
@@ -79,10 +71,20 @@ func AlgoritmoFirma(cert *x509.Certificate) string {
 	}
 }
 
-// Auditar clasifica la clave pública y la firma del certificado. Los algoritmos
-// sin regla en la tabla no se convierten en hallazgos: se devuelven aparte para
-// informar de ellos sin inventar una categoría.
-func Auditar(cert *x509.Certificate) (hallazgos []securityv1alpha1.Hallazgo, sinRegla []string) {
+// Resultado de auditar un certificado.
+type Resultado struct {
+	Hallazgos []securityv1alpha1.Hallazgo
+	// RiesgoGlobal por la regla del peor caso sobre el riesgo combinado.
+	RiesgoGlobal string
+	// SinRegla son los algoritmos encontrados que la tabla todavía no
+	// clasifica: se informa de ellos sin inventarles una categoría.
+	SinRegla []string
+}
+
+// Auditar clasifica la clave pública y la firma del certificado y calcula el
+// riesgo combinado de cada hallazgo con la exposición y el alcance del servicio.
+func Auditar(cert *x509.Certificate, exposicion securityv1alpha1.Exposicion,
+	alcance securityv1alpha1.Alcance) (Resultado, error) {
 	encontrados := []struct {
 		algoritmo string
 		origen    securityv1alpha1.Origen
@@ -90,34 +92,26 @@ func Auditar(cert *x509.Certificate) (hallazgos []securityv1alpha1.Hallazgo, sin
 		{AlgoritmoClavePublica(cert), securityv1alpha1.OrigenClavePublica},
 		{AlgoritmoFirma(cert), securityv1alpha1.OrigenFirma},
 	}
+	var resultado Resultado
+	var niveles []string
 	for _, e := range encontrados {
 		regla, ok := Tabla[e.algoritmo]
 		if !ok {
-			sinRegla = append(sinRegla, e.algoritmo)
+			resultado.SinRegla = append(resultado.SinRegla, e.algoritmo)
 			continue
 		}
-		hallazgos = append(hallazgos, securityv1alpha1.Hallazgo{
-			Algoritmo: e.algoritmo,
-			Origen:    e.origen,
-			Categoria: regla.Categoria,
-			// TODO: RiesgoCombinado = peso de la categoría × exposición × alcance
-			// (spec.exposicion y spec.alcance), como en riesgo.py.
-		})
-	}
-	return hallazgos, sinRegla
-}
-
-// PeorCaso devuelve la categoría más grave de los hallazgos, o "" si no hay.
-//
-// PROVISIONAL: la regla del peor caso de la Fase 4 se aplica sobre el riesgo
-// combinado (Urgente -> Crítico, Alto -> Alto...). Mientras RiesgoCombinado no
-// se calcule, se aplica sobre la categoría, con los pesos de la Fase 1.
-func PeorCaso(hallazgos []securityv1alpha1.Hallazgo) securityv1alpha1.Categoria {
-	var peor securityv1alpha1.Categoria
-	for _, h := range hallazgos {
-		if peor == "" || pesos[h.Categoria] > pesos[peor] {
-			peor = h.Categoria
+		riesgo, err := RiesgoCombinado(regla.Categoria, exposicion, alcance)
+		if err != nil {
+			return Resultado{}, err
 		}
+		resultado.Hallazgos = append(resultado.Hallazgos, securityv1alpha1.Hallazgo{
+			Algoritmo:       e.algoritmo,
+			Origen:          e.origen,
+			Categoria:       regla.Categoria,
+			RiesgoCombinado: riesgo.String(),
+		})
+		niveles = append(niveles, riesgo.Nivel)
 	}
-	return peor
+	resultado.RiesgoGlobal = RiesgoGlobal(niveles)
+	return resultado, nil
 }

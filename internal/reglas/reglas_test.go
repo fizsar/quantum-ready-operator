@@ -52,76 +52,77 @@ func autofirmado(t *testing.T, privada crypto.Signer) *x509.Certificate {
 	return cert
 }
 
-func TestAuditarClasificaClaveYFirma(t *testing.T) {
+func TestAuditarClasificaClaveYFirmaConSuRiesgo(t *testing.T) {
 	rsaClave, _ := rsa.GenerateKey(rand.Reader, 2048)
 	ecClave, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	_, edClave, _ := ed25519.GenerateKey(rand.Reader)
 
 	casos := []struct {
-		nombre    string
-		clave     crypto.Signer
-		algoritmo string
+		nombre     string
+		clave      crypto.Signer
+		algoritmo  string
+		exposicion securityv1alpha1.Exposicion
+		alcance    securityv1alpha1.Alcance
+		riesgo     string
+		global     string
 	}{
-		{"RSA", rsaClave, "RSA"},
-		{"ECDSA", ecClave, "ECDSA"},
-		{"Ed25519", edClave, "Ed25519"},
+		{"RSA alta/alto", rsaClave, "RSA", "alta", "alto", "Urgente (16)", "Crítico"},
+		{"ECDSA baja/alto", ecClave, "ECDSA", "baja", "alto", "Alto (8)", "Alto"},
+		{"Ed25519 baja/bajo", edClave, "Ed25519", "baja", "bajo", "Medio (4)", "Medio"},
 	}
 	for _, c := range casos {
 		t.Run(c.nombre, func(t *testing.T) {
-			hallazgos, sinRegla := Auditar(autofirmado(t, c.clave))
-			if len(sinRegla) != 0 {
-				t.Fatalf("no debería haber algoritmos sin regla: %v", sinRegla)
+			resultado, err := Auditar(autofirmado(t, c.clave), c.exposicion, c.alcance)
+			if err != nil {
+				t.Fatal(err)
 			}
-			if len(hallazgos) != 2 {
-				t.Fatalf("se esperaban 2 hallazgos (clave pública y firma), hay %d", len(hallazgos))
+			if len(resultado.SinRegla) != 0 {
+				t.Fatalf("no debería haber algoritmos sin regla: %v", resultado.SinRegla)
+			}
+			if len(resultado.Hallazgos) != 2 {
+				t.Fatalf("se esperaban 2 hallazgos (clave pública y firma), hay %d", len(resultado.Hallazgos))
 			}
 			for i, origen := range []securityv1alpha1.Origen{
 				securityv1alpha1.OrigenClavePublica, securityv1alpha1.OrigenFirma,
 			} {
-				h := hallazgos[i]
-				if h.Algoritmo != c.algoritmo || h.Origen != origen ||
-					h.Categoria != securityv1alpha1.CategoriaCritico || h.RiesgoCombinado != "" {
-					t.Errorf("hallazgo %d inesperado: %+v", i, h)
+				esperado := securityv1alpha1.Hallazgo{
+					Algoritmo: c.algoritmo, Origen: origen,
+					Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: c.riesgo,
 				}
+				if resultado.Hallazgos[i] != esperado {
+					t.Errorf("hallazgo %d = %+v, se esperaba %+v", i, resultado.Hallazgos[i], esperado)
+				}
+			}
+			if resultado.RiesgoGlobal != c.global {
+				t.Errorf("RiesgoGlobal = %q, se esperaba %q", resultado.RiesgoGlobal, c.global)
 			}
 		})
 	}
 }
 
-func TestAlgoritmosSinReglaNoInventanCategoria(t *testing.T) {
+func TestAlgoritmosSinReglaNoInventanCategoriaNiRiesgo(t *testing.T) {
 	cert := &x509.Certificate{
 		PublicKeyAlgorithm: x509.DSA,
 		SignatureAlgorithm: x509.DSAWithSHA256,
 	}
-	hallazgos, sinRegla := Auditar(cert)
-	if len(hallazgos) != 0 {
-		t.Errorf("no debería haber hallazgos: %+v", hallazgos)
+	resultado, err := Auditar(cert, "alta", "alto")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(sinRegla) != 2 || sinRegla[0] != "DSA" {
-		t.Errorf("sinRegla = %v", sinRegla)
+	if len(resultado.Hallazgos) != 0 {
+		t.Errorf("no debería haber hallazgos: %+v", resultado.Hallazgos)
 	}
-	if PeorCaso(hallazgos) != "" {
-		t.Error("sin hallazgos, el peor caso debe quedar vacío")
+	if len(resultado.SinRegla) != 2 || resultado.SinRegla[0] != "DSA" {
+		t.Errorf("SinRegla = %v", resultado.SinRegla)
+	}
+	if resultado.RiesgoGlobal != "" {
+		t.Errorf("sin hallazgos, el riesgo global debe quedar vacío, no %q", resultado.RiesgoGlobal)
 	}
 }
 
-func TestPeorCasoUsaLosPesosDeLaFase1(t *testing.T) {
-	h := func(c securityv1alpha1.Categoria) securityv1alpha1.Hallazgo {
-		return securityv1alpha1.Hallazgo{Categoria: c}
-	}
-	casos := []struct {
-		hallazgos []securityv1alpha1.Hallazgo
-		esperado  securityv1alpha1.Categoria
-	}{
-		{[]securityv1alpha1.Hallazgo{h(securityv1alpha1.CategoriaAceptable), h(securityv1alpha1.CategoriaObsoleto),
-			h(securityv1alpha1.CategoriaAdvertencia)}, securityv1alpha1.CategoriaObsoleto},
-		{[]securityv1alpha1.Hallazgo{h(securityv1alpha1.CategoriaObsoleto), h(securityv1alpha1.CategoriaCritico)},
-			securityv1alpha1.CategoriaCritico},
-		{[]securityv1alpha1.Hallazgo{h(securityv1alpha1.CategoriaPostCuantico)}, securityv1alpha1.CategoriaPostCuantico},
-	}
-	for _, c := range casos {
-		if got := PeorCaso(c.hallazgos); got != c.esperado {
-			t.Errorf("PeorCaso(%v) = %q, se esperaba %q", c.hallazgos, got, c.esperado)
-		}
+func TestAuditarPropagaElErrorDeUnaExposicionNoValida(t *testing.T) {
+	rsaClave, _ := rsa.GenerateKey(rand.Reader, 2048)
+	if _, err := Auditar(autofirmado(t, rsaClave), "media", "alto"); err == nil {
+		t.Error("una exposición no válida debería dar error")
 	}
 }

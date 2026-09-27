@@ -106,10 +106,13 @@ var _ = Describe("CryptoAudit Controller", func() {
 
 		Expect(resultado.RequeueAfter).To(BeZero())
 		Expect(a.Status.Hallazgos).To(Equal([]securityv1alpha1.Hallazgo{
-			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenClavePublica, Categoria: securityv1alpha1.CategoriaCritico},
-			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenFirma, Categoria: securityv1alpha1.CategoriaCritico},
+			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenClavePublica,
+				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
+			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenFirma,
+				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
 		}))
-		Expect(a.Status.RiesgoGlobal).To(Equal("Crítico"))
+		// Crítico (4) × exposición alta (2) × alcance bajo (1) = 8 -> Alto -> global Alto
+		Expect(a.Status.RiesgoGlobal).To(Equal("Alto"))
 		Expect(a.Status.UltimaAuditoria.IsZero()).To(BeFalse())
 		condicion := meta.FindStatusCondition(a.Status.Conditions, CondicionAuditado)
 		Expect(condicion).NotTo(BeNil())
