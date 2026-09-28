@@ -41,18 +41,39 @@ la auditoría y una condición `Auditado`.
 Igual que el analizador de certificados de la Fase 1, la clave pública da un
 hallazgo y la firma da dos (familia y resumen):
 
-| Origen | Algoritmos | Categoría |
-|---|---|---|
-| Clave pública | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) |
-| Firma: familia | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) |
-| Firma: resumen | MD5, SHA-1 | Obsoleto (colisiones prácticas) |
-| Firma: resumen | SHA-256, SHA-384, SHA-512 | Aceptable |
+| Origen | Algoritmos | Categoría | Tipo de remedio |
+|---|---|---|---|
+| Clave pública | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) | `pendiente_ecosistema` |
+| Firma: familia | RSA, ECDSA, Ed25519 | Crítico (rotos por Shor) | `pendiente_ecosistema` |
+| Firma: resumen | MD5, SHA-1 | Obsoleto (colisiones prácticas) | `corregible_hoy` |
+| Firma: resumen | SHA-256, SHA-384, SHA-512 | Aceptable | (vacío: no necesita remedio) |
 
 Ed25519 no tiene un resumen separable (forma parte del propio esquema de
 firma), así que solo da el hallazgo de familia. La familia y el resumen salen
 de la constante `x509.SignatureAlgorithm`, sin analizar cadenas de texto. Los
 algoritmos sin regla no se convierten en hallazgos: se mencionan en la
 condición `Auditado`, sin inventarles una categoría.
+
+### Tipo de remedio
+
+Cada hallazgo indica **quién lo resuelve** (`tipoRemedio`), con el mismo
+reparto que el informe ejecutivo de la Fase 4:
+
+- `corregible_hoy`: obsoleto por motivos clásicos, no cuánticos. Se corrige ya
+  reemitiendo el certificado con otro resumen (SHA-1 o MD5 → SHA-256).
+- `migracion_disponible`: intercambio de claves (RSA, ECDSA o DH) que ya puede
+  migrar a ML-KEM, como el túnel híbrido de la Fase 2.
+- `pendiente_ecosistema`: firmas (RSA, ECDSA, Ed25519) que esperan a que las
+  firmas post-cuánticas (ML-DSA, SLH-DSA) lleguen a las CAs, los navegadores y
+  las librerías.
+
+En un certificado, tanto la clave pública como la firma sirven para autenticar,
+no para intercambiar claves: por eso RSA, ECDSA y Ed25519 son siempre
+`pendiente_ecosistema`, igual que la Fase 4 trata como firma el RSA de
+certificados y claves de host. Ningún hallazgo actual es `migracion_disponible`;
+el valor existe en el esquema para cuando el operador audite configuraciones con
+intercambio de claves. Un mismo certificado puede mezclar remedios: en uno
+RSA+SHA-1, SHA-1 se corrige hoy y RSA espera al ecosistema.
 
 ### Riesgo
 
@@ -173,20 +194,24 @@ status:
     categoria: Crítico
     origen: clavePublica
     riesgoCombinado: Urgente (16)
+    tipoRemedio: pendiente_ecosistema
   - algoritmo: RSA
     categoria: Crítico
     origen: firma
     riesgoCombinado: Urgente (16)
+    tipoRemedio: pendiente_ecosistema
   - algoritmo: SHA-1
     categoria: Obsoleto
     origen: firma
     riesgoCombinado: Urgente (12)
+    tipoRemedio: corregible_hoy
   riesgoGlobal: Crítico
-  ultimaAuditoria: "2026-09-27T23:10:18Z"
+  ultimaAuditoria: "2026-09-28T19:46:46Z"
 ```
 
-Un certificado ECDSA P-384 firmado con SHA-384 da ECDSA Crítico (clave y firma)
-y SHA-384 Aceptable; uno Ed25519, solo los dos hallazgos Ed25519.
+Un certificado ECDSA P-384 firmado con SHA-384 da ECDSA Crítico
+`pendiente_ecosistema` (clave y firma) y SHA-384 Aceptable sin `tipoRemedio`; uno
+Ed25519, solo los dos hallazgos Ed25519, ambos `pendiente_ecosistema`.
 
 Cambiar el `spec` vuelve a auditar: al pasar `rsa-baja-bajo` a exposición alta,
 su riesgo cambió de Medio (4) a Alto (8) sin recrear el recurso.
@@ -214,15 +239,17 @@ Ejecuta los tests contra un servidor de API real (envtest): el reconciliador
 con un Secret RSA, un Secret inexistente y un Secret que no es TLS; el watch,
 con un manager real que crea, cambia, borra y recrea el Secret; y el índice por
 Secret (cobertura del 84,8 %); y la tabla de reglas (cada familia y cada resumen
-de firma, con certificados reales) y el modelo de riesgo (98,1 %), con al menos
-un caso por cada nivel de riesgo y los límites de cada umbral.
+de firma, con certificados reales, y el tipo de remedio de cada uno, incluido
+RSA+SHA-1 con dos remedios distintos y la coherencia entre categoría y remedio
+en toda la tabla) y el modelo de riesgo (98,1 %), con al menos un caso por cada
+nivel de riesgo y los límites de cada umbral.
 
 ## Estado actual
 
 **Primer hito funcional, no un producto completo.** Ya funciona el camino de
 datos completo: el operador lee un Secret real, extrae los algoritmos de su
 certificado, calcula su riesgo combinado con la exposición y el alcance del
-servicio, y lo refleja en `status`. Falta:
+servicio, indica quién resuelve cada hallazgo y lo refleja en `status`. Falta:
 
 - **Solo Secrets TLS.** No se auditan otros recursos (Ingress, Services,
   configuraciones de mallas de servicio…).
