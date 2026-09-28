@@ -25,25 +25,38 @@ import (
 	securityv1alpha1 "github.com/fizsar/quantum-ready-operator/api/v1alpha1"
 )
 
-// Regla es la clasificación de un algoritmo y el motivo.
+// Regla es la clasificación de un algoritmo, el motivo y quién lo resuelve.
 type Regla struct {
 	Categoria securityv1alpha1.Categoria
 	Motivo    string
+	// Remedio es "" si el algoritmo no necesita remedio (Aceptable).
+	Remedio securityv1alpha1.TipoRemedio
 }
 
+const (
+	critico             = securityv1alpha1.CategoriaCritico
+	obsoleto            = securityv1alpha1.CategoriaObsoleto
+	aceptable           = securityv1alpha1.CategoriaAceptable
+	corregibleHoy       = securityv1alpha1.RemedioCorregibleHoy
+	pendienteEcosistema = securityv1alpha1.RemedioPendienteEcosistema
+)
+
 // Tabla contiene las reglas disponibles, con las mismas categorías y motivos
-// que la Fase 1.
+// que la Fase 1. El remedio sigue el reparto de la Fase 4: en un certificado,
+// tanto la clave pública como la firma sirven para autenticar (firmar), no
+// para intercambiar claves, así que RSA, ECDSA y Ed25519 esperan a ML-DSA /
+// SLH-DSA (pendiente_ecosistema) y ninguno es migracion_disponible.
 var Tabla = map[string]Regla{
 	// Familias de clave pública y de firma: rotas por Shor
-	"RSA":     {securityv1alpha1.CategoriaCritico, "Roto por Shor (factorización de enteros)."},
-	"ECDSA":   {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
-	"Ed25519": {securityv1alpha1.CategoriaCritico, "Roto por Shor (logaritmo discreto en curvas elípticas)."},
-	// Resúmenes (hash) de la firma
-	"MD5":     {securityv1alpha1.CategoriaObsoleto, "Colisiones prácticas desde 2004."},
-	"SHA-1":   {securityv1alpha1.CategoriaObsoleto, "Colisión práctica demostrada (SHAttered, 2017)."},
-	"SHA-256": {securityv1alpha1.CategoriaAceptable, "Grover lo deja en 128 bits efectivos, suficiente hoy."},
-	"SHA-384": {securityv1alpha1.CategoriaAceptable, "Margen amplio incluso frente a Grover."},
-	"SHA-512": {securityv1alpha1.CategoriaAceptable, "Margen amplio incluso frente a Grover."},
+	"RSA":     {critico, "Roto por Shor (factorización de enteros).", pendienteEcosistema},
+	"ECDSA":   {critico, "Roto por Shor (logaritmo discreto en curvas elípticas).", pendienteEcosistema},
+	"Ed25519": {critico, "Roto por Shor (logaritmo discreto en curvas elípticas).", pendienteEcosistema},
+	// Resúmenes (hash) de la firma: los rotos se corrigen hoy reemitiendo el certificado
+	"MD5":     {obsoleto, "Colisiones prácticas desde 2004.", corregibleHoy},
+	"SHA-1":   {obsoleto, "Colisión práctica demostrada (SHAttered, 2017).", corregibleHoy},
+	"SHA-256": {aceptable, "Grover lo deja en 128 bits efectivos, suficiente hoy.", ""},
+	"SHA-384": {aceptable, "Margen amplio incluso frente a Grover.", ""},
+	"SHA-512": {aceptable, "Margen amplio incluso frente a Grover.", ""},
 }
 
 // firma descompone un algoritmo de firma en su familia y su resumen.
@@ -146,6 +159,7 @@ func Auditar(cert *x509.Certificate, exposicion securityv1alpha1.Exposicion,
 			Origen:          e.origen,
 			Categoria:       regla.Categoria,
 			RiesgoCombinado: riesgo.String(),
+			TipoRemedio:     regla.Remedio,
 		})
 		niveles = append(niveles, riesgo.Nivel)
 	}

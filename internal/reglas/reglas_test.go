@@ -34,11 +34,10 @@ import (
 )
 
 const (
-	critico   = securityv1alpha1.CategoriaCritico
-	obsoleto  = securityv1alpha1.CategoriaObsoleto
-	aceptable = securityv1alpha1.CategoriaAceptable
 	clave     = securityv1alpha1.OrigenClavePublica
 	firmaO    = securityv1alpha1.OrigenFirma
+	hoy       = securityv1alpha1.RemedioCorregibleHoy
+	ecosistem = securityv1alpha1.RemedioPendienteEcosistema
 )
 
 // autofirmado genera un certificado autofirmado real con la clave indicada.
@@ -102,12 +101,14 @@ func TestAuditarClasificaElResumenDeLaFirma(t *testing.T) {
 		hash      string
 		categoria securityv1alpha1.Categoria
 		riesgo    string // con exposición baja y alcance bajo
+		remedio   securityv1alpha1.TipoRemedio
 	}{
-		{x509.MD5WithRSA, "MD5", obsoleto, "Bajo (3)"},
-		{x509.SHA1WithRSA, "SHA-1", obsoleto, "Bajo (3)"},
-		{x509.SHA256WithRSA, "SHA-256", aceptable, "Bajo (1)"},
-		{x509.SHA384WithRSA, "SHA-384", aceptable, "Bajo (1)"},
-		{x509.SHA512WithRSA, "SHA-512", aceptable, "Bajo (1)"},
+		{x509.MD5WithRSA, "MD5", obsoleto, "Bajo (3)", hoy},
+		{x509.SHA1WithRSA, "SHA-1", obsoleto, "Bajo (3)", hoy},
+		// Aceptable: no necesita remedio, el campo queda vacío
+		{x509.SHA256WithRSA, "SHA-256", aceptable, "Bajo (1)", ""},
+		{x509.SHA384WithRSA, "SHA-384", aceptable, "Bajo (1)", ""},
+		{x509.SHA512WithRSA, "SHA-512", aceptable, "Bajo (1)", ""},
 	}
 	for _, c := range casos {
 		cert := &x509.Certificate{PublicKeyAlgorithm: x509.RSA, SignatureAlgorithm: c.algoritmo}
@@ -116,9 +117,9 @@ func TestAuditarClasificaElResumenDeLaFirma(t *testing.T) {
 			t.Fatal(err)
 		}
 		esperado := []securityv1alpha1.Hallazgo{
-			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Medio (4)"},
-			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Medio (4)"},
-			{Algoritmo: c.hash, Origen: firmaO, Categoria: c.categoria, RiesgoCombinado: c.riesgo},
+			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Medio (4)", TipoRemedio: ecosistem},
+			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Medio (4)", TipoRemedio: ecosistem},
+			{Algoritmo: c.hash, Origen: firmaO, Categoria: c.categoria, RiesgoCombinado: c.riesgo, TipoRemedio: c.remedio},
 		}
 		if !reflect.DeepEqual(resultado.Hallazgos, esperado) {
 			t.Errorf("%v:\n  hallazgos = %+v\n  esperados = %+v", c.algoritmo, resultado.Hallazgos, esperado)
@@ -143,23 +144,23 @@ func TestAuditarCertificadosReales(t *testing.T) {
 		global    string
 	}{
 		{"RSA con SHA-256", rsaClave, []securityv1alpha1.Hallazgo{
-			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
-			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "RSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
+			{Algoritmo: "RSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
 			{Algoritmo: "SHA-256", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
 		}, "Crítico"},
 		{"ECDSA P-256 con SHA-256", ec256, []securityv1alpha1.Hallazgo{
-			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
-			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
+			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
 			{Algoritmo: "SHA-256", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
 		}, "Crítico"},
 		{"ECDSA P-384 con SHA-384", ec384, []securityv1alpha1.Hallazgo{
-			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
-			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "ECDSA", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
+			{Algoritmo: "ECDSA", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
 			{Algoritmo: "SHA-384", Origen: firmaO, Categoria: aceptable, RiesgoCombinado: "Medio (4)"},
 		}, "Crítico"},
 		{"Ed25519 sin resumen separable", edClave, []securityv1alpha1.Hallazgo{
-			{Algoritmo: "Ed25519", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
-			{Algoritmo: "Ed25519", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)"},
+			{Algoritmo: "Ed25519", Origen: clave, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
+			{Algoritmo: "Ed25519", Origen: firmaO, Categoria: critico, RiesgoCombinado: "Urgente (16)", TipoRemedio: ecosistem},
 		}, "Crítico"},
 	}
 	for _, c := range casos {
@@ -191,7 +192,7 @@ func TestRiesgoGlobalConHallazgosDeResumen(t *testing.T) {
 		t.Fatal(err)
 	}
 	esperado := []securityv1alpha1.Hallazgo{
-		{Algoritmo: "SHA-1", Origen: firmaO, Categoria: obsoleto, RiesgoCombinado: "Urgente (12)"},
+		{Algoritmo: "SHA-1", Origen: firmaO, Categoria: obsoleto, RiesgoCombinado: "Urgente (12)", TipoRemedio: hoy},
 	}
 	if !reflect.DeepEqual(resultado.Hallazgos, esperado) {
 		t.Errorf("hallazgos = %+v, esperados %+v", resultado.Hallazgos, esperado)
@@ -236,6 +237,52 @@ func TestAlgoritmosSinReglaNoInventanCategoriaNiRiesgo(t *testing.T) {
 	vacio, _ := Auditar(casos[0].cert, "alta", "alto")
 	if len(vacio.Hallazgos) != 0 || vacio.RiesgoGlobal != "" {
 		t.Errorf("sin hallazgos, el riesgo global debe quedar vacío: %+v", vacio)
+	}
+}
+
+// El caso del enunciado: RSA+SHA-1 mezcla los dos remedios en un mismo
+// certificado. RSA (clave y firma) espera al ecosistema; SHA-1 se corrige hoy.
+func TestTipoRemedioEnUnCertificadoRSAConSHA1(t *testing.T) {
+	cert := &x509.Certificate{PublicKeyAlgorithm: x509.RSA, SignatureAlgorithm: x509.SHA1WithRSA}
+	resultado, err := Auditar(cert, "alta", "alto")
+	if err != nil {
+		t.Fatal(err)
+	}
+	remedios := map[string]securityv1alpha1.TipoRemedio{}
+	for _, h := range resultado.Hallazgos {
+		remedios[string(h.Origen)+"/"+h.Algoritmo] = h.TipoRemedio
+	}
+	esperado := map[string]securityv1alpha1.TipoRemedio{
+		"clavePublica/RSA": ecosistem,
+		"firma/RSA":        ecosistem,
+		"firma/SHA-1":      hoy,
+	}
+	if !reflect.DeepEqual(remedios, esperado) {
+		t.Errorf("remedios = %v, se esperaba %v", remedios, esperado)
+	}
+}
+
+// Invariantes de la tabla: cada categoría tiene el remedio que le corresponde,
+// y ninguna regla de certificado es migracion_disponible (un certificado no
+// intercambia claves).
+func TestTipoRemedioCoherenteConLaCategoria(t *testing.T) {
+	porCategoria := map[securityv1alpha1.Categoria]securityv1alpha1.TipoRemedio{
+		securityv1alpha1.CategoriaCritico:   ecosistem,
+		securityv1alpha1.CategoriaObsoleto:  hoy,
+		securityv1alpha1.CategoriaAceptable: "",
+	}
+	for algoritmo, regla := range Tabla {
+		esperado, ok := porCategoria[regla.Categoria]
+		if !ok {
+			t.Errorf("%s: categoría %q sin remedio definido en el test", algoritmo, regla.Categoria)
+			continue
+		}
+		if regla.Remedio != esperado {
+			t.Errorf("%s (%s): remedio %q, se esperaba %q", algoritmo, regla.Categoria, regla.Remedio, esperado)
+		}
+		if regla.Remedio == securityv1alpha1.RemedioMigracionDisponible {
+			t.Errorf("%s: un algoritmo de certificado no puede ser migracion_disponible", algoritmo)
+		}
 	}
 }
 

@@ -188,6 +188,15 @@ spec:
                         pesos y umbrales de la Fase 1, en el formato "Nivel (puntuación)",
                         p. ej. "Urgente (16)".
                       type: string
+                    tipoRemedio:
+                      description: |-
+                        tipoRemedio: quién resuelve el hallazgo. Vacío en los algoritmos
+                        Aceptable, que no necesitan remedio.
+                      enum:
+                      - corregible_hoy
+                      - migracion_disponible
+                      - pendiente_ecosistema
+                      type: string
                   required:
                   - algoritmo
                   - categoria

@@ -107,10 +107,13 @@ var _ = Describe("CryptoAudit Controller", func() {
 		Expect(resultado.RequeueAfter).To(BeZero())
 		Expect(a.Status.Hallazgos).To(Equal([]securityv1alpha1.Hallazgo{
 			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenClavePublica,
-				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
+				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)",
+				TipoRemedio: securityv1alpha1.RemedioPendienteEcosistema},
 			{Algoritmo: "RSA", Origen: securityv1alpha1.OrigenFirma,
-				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)"},
-			// Resumen de la firma: Aceptable (1) × alta (2) × bajo (1) = 2 -> Bajo
+				Categoria: securityv1alpha1.CategoriaCritico, RiesgoCombinado: "Alto (8)",
+				TipoRemedio: securityv1alpha1.RemedioPendienteEcosistema},
+			// Resumen de la firma: Aceptable (1) × alta (2) × bajo (1) = 2 -> Bajo,
+			// sin remedio (tipoRemedio vacío)
 			{Algoritmo: "SHA-256", Origen: securityv1alpha1.OrigenFirma,
 				Categoria: securityv1alpha1.CategoriaAceptable, RiesgoCombinado: "Bajo (2)"},
 		}))

@@ -62,6 +62,23 @@ const (
 	OrigenFirma        Origen = "firma"
 )
 
+// TipoRemedio distingue, como el informe de la Fase 4, quién resuelve un hallazgo.
+// +kubebuilder:validation:Enum=corregible_hoy;migracion_disponible;pendiente_ecosistema
+type TipoRemedio string
+
+const (
+	// RemedioCorregibleHoy: obsoleto por motivos clásicos (SHA-1, MD5...); se
+	// corrige hoy reemitiendo o cambiando la configuración.
+	RemedioCorregibleHoy TipoRemedio = "corregible_hoy"
+	// RemedioMigracionDisponible: intercambio de claves (RSA/ECDSA/DH) que ya
+	// puede migrar a ML-KEM. Un certificado no hace intercambio de claves, así
+	// que hoy ningún hallazgo del operador lo usa.
+	RemedioMigracionDisponible TipoRemedio = "migracion_disponible"
+	// RemedioPendienteEcosistema: firma (RSA/ECDSA/Ed25519) que espera a que
+	// ML-DSA/SLH-DSA estén disponibles en CAs, navegadores y librerías.
+	RemedioPendienteEcosistema TipoRemedio = "pendiente_ecosistema"
+)
+
 // CryptoAuditSpec define qué Secret auditar y el contexto del servicio que lo usa.
 type CryptoAuditSpec struct {
 	// targetRef es el Secret de tipo kubernetes.io/tls a auditar.
@@ -93,6 +110,11 @@ type Hallazgo struct {
 	// p. ej. "Urgente (16)".
 	// +optional
 	RiesgoCombinado string `json:"riesgoCombinado,omitempty"`
+
+	// tipoRemedio: quién resuelve el hallazgo. Vacío en los algoritmos
+	// Aceptable, que no necesitan remedio.
+	// +optional
+	TipoRemedio TipoRemedio `json:"tipoRemedio,omitempty"`
 }
 
 // CryptoAuditStatus es el resultado de la última auditoría.
